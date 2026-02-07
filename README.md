@@ -1,2 +1,2 @@
 # TradingBotSim
-Historical trading bot simulation for gold
+Historical trading bot simulation stock market trading
