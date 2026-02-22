@@ -6,6 +6,7 @@ import oandapyV20
 import oandapyV20.endpoints.instruments as instruments
 import config
 import uvicorn
+from backend.data_manager import DataManager, InstrumentDataFrame
 
 app = FastAPI()
 
@@ -22,7 +23,7 @@ TREND_DIRECTION_ENABLED = False
 SHORT_ENABLED = False
 LONG_ENABLED = True
 
-END_DATE = "2026-02-06T23:59:59Z"
+START_DATE = "2026-02-06T23:59:59Z"
 
 RSI_PERIOD = 14
 BB_PERIOD = 20 #20
@@ -56,96 +57,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==============================
-# OANDA CLIENT
-# ==============================
-client = oandapyV20.API(access_token=config.OANDA_API_KEY, environment="practice")
-
-# ==============================
-# CORE FUNCTIONS
-# ==============================
-def load_candles(granularity, end=END_DATE, num_candles=CANDLES_TO_LOAD_HIST):
-    MAX_COUNT = 4000
-    candles_remaining = num_candles
-    to_time = pd.to_datetime(end)
-
-    all_records = []
-
-    while candles_remaining > 0:
-        batch_size = min(MAX_COUNT, candles_remaining)
-        params = {"granularity": granularity, "price": "M", "count": batch_size, "to": to_time.strftime("%Y-%m-%dT%H:%M:%SZ")}
-        r = instruments.InstrumentsCandles(instrument=INSTRUMENT, params=params)
-        client.request(r)
-        candles = r.response.get("candles", [])
-        if not candles:
-            break
-        records = []
-        for candle in candles:
-            if not candle["complete"]:
-                continue
-            records.append({
-                "time": candle["time"],
-                "open": float(candle["mid"]["o"]),
-                "high": float(candle["mid"]["h"]),
-                "low": float(candle["mid"]["l"]),
-                "close": float(candle["mid"]["c"]),
-                "volume": float(candle["volume"])
-            })
-        if not records:
-            break
-        df_chunk = pd.DataFrame(records)
-        df_chunk["time"] = pd.to_datetime(df_chunk["time"])
-        all_records.append(df_chunk)
-        to_time = df_chunk["time"].min() - pd.Timedelta(seconds=1)
-        candles_remaining -= len(df_chunk)
-
-    if not all_records:
-        return pd.DataFrame()
-    df = pd.concat(all_records).drop_duplicates(subset="time").sort_values("time").reset_index(drop=True)
-    if len(df) > num_candles:
-        df = df.iloc[-num_candles:].reset_index(drop=True)
-    return df
-
-def add_indicators(df):
-    delta = df["close"].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(RSI_PERIOD).mean()
-    avg_loss = loss.rolling(RSI_PERIOD).mean()
-    rs = avg_gain / avg_loss
-    df["RSI"] = 100 - (100 / (1 + rs))
-
-    df["BB_MID"] = df["close"].rolling(BB_PERIOD).mean()
-    df["BB_STD"] = df["close"].rolling(BB_PERIOD).std()
-    df["BB_UPPER"] = df["BB_MID"] + BB_STD * df["BB_STD"]
-    df["BB_LOWER"] = df["BB_MID"] - BB_STD * df["BB_STD"]
-    df["BB_WIDTH"] = df["BB_UPPER"] - df["BB_LOWER"]
-    df["AVG_100_BB_WIDTH_20"] = df["BB_WIDTH"].rolling(100).mean()
-
-    df["hl"] = df["high"] - df["low"]
-    df["hc"] = (df["high"] - df["close"].shift()).abs()
-    df["lc"] = (df["low"] - df["close"].shift()).abs()
-    df["tr"] = df[["hl", "hc", "lc"]].max(axis=1)
-    df["atr_SMA_14"] = df["tr"].rolling(14).mean()
-    df["atr_SMA_80"] = df["tr"].rolling(80).mean()
-
-    df["avg_vol"] = df["volume"].rolling(50).mean()
-    df["rvol"] = df["volume"] / df["avg_vol"]
-    df["rvol"] = df["rvol"].replace([np.inf, -np.inf], 0).fillna(0)
-    return df
 
 # ==============================
 # API ENDPOINT
 # ==============================
 @app.get("/backtest")
 def run_backtest(
-    num_candles: int = Query(2000)
+    num_candles: int = Query(2000),
+    bb_period: int = Query(20),
+    longs_enabled: bool = Query(True),
+    shorts_enabled: bool = Query(True),
+    trend_enabled: bool = Query(True),
+    granularity: str = Query("M5"),
+    rsi_period: int = Query(14),
+    bb_std = Query(2),
+    rvol_threshold = Query(1.5)
 ):
+
+
+    dm_entry = DataManager(INSTRUMENT, START_DATE, CANDLES_TO_LOAD_HIST, GRANULARITY_ENTRY)
+    dm_trend = DataManager(INSTRUMENT, START_DATE, CANDLES_TO_LOAD_HIST, GRANULARITY_TREND)
     # Load Data
-    global total_profit
     total_profit = 0.0
-    df_trend = add_indicators(load_candles(GRANULARITY_TREND))
-    df_entry = add_indicators(load_candles(GRANULARITY_ENTRY))
+    df_trend = dm_trend.fetch_candle_dataframe()
+    df_entry = dm_entry.fetch_candle_dataframe()
+    df_entry = dm_entry.add_indicators_rsi_bb_atrsma_rv(df_entry, RSI_PERIOD, BB_PERIOD, BB_STD)
     df_trend["EMA200"] = df_trend["close"].ewm(span=200, adjust=False).mean()
     # df_entry["time_num"] = mdates.date2num(df_entry["time"])
     
@@ -221,11 +157,11 @@ def run_backtest(
 
         if position is None and pending_setup is None:
         # LONG SETUP (price stretched down)
-            if LONG_ENABLED and rsi < long_rsi_thershold and price <= (bb_lower * 1) and rvol >= RVOL_THRESHOLD and long_atrChopCheck == False: # Removed Conditions:trend_direction == "long" and 
+            if longs_enabled and rsi < long_rsi_thershold and price <= (bb_lower * 1) and rvol >= rvol_threshold and long_atrChopCheck == False: # Removed Conditions:trend_direction == "long" and 
                 pending_setup = "long"
 
             # SHORT SETUP (price stretched up)
-            elif SHORT_ENABLED and rsi > short_rsi_thershold and price >= (bb_upper * 1) and short_atrChopCheck == False and trend_direction == "short": # Removed Conditions:  || and rvol >= RVOL_THRESHOLD  
+            elif shorts_enabled and rsi > short_rsi_thershold and price >= (bb_upper * 1) and rvol >= rvol_threshold and short_atrChopCheck == False and trend_direction == "short": # Removed Conditions:  || and rvol >= RVOL_THRESHOLD  
                 pending_setup = "short"
 
         # REVERSAL CONFIRMATION
