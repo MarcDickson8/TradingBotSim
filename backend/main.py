@@ -6,7 +6,7 @@ import oandapyV20
 import oandapyV20.endpoints.instruments as instruments
 import config
 import uvicorn
-from backend.data_manager import DataManager, InstrumentDataFrame
+from data_manager import DataManager, InstrumentDataFrame
 
 app = FastAPI()
 
@@ -16,10 +16,10 @@ PAUSE_INTERVAL_HIST = 0 #0.03
 INSTRUMENT = "XAU_AUD"
 GRANULARITY_ENTRY = "M5"
 GRANULARITY_TREND = "H1" #"H1" uses this one timeframe for general trend direction
-CANDLES_TO_LOAD_HIST = 5000  # reduced for testing
+CANDLES_TO_LOAD_HIST = 20000  # reduced for testing
 SR_WINDOW_BOUNDS = 500
 PLOT_ENABLED = False
-TREND_DIRECTION_ENABLED = False
+TREND_DIRECTION_ENABLED = True
 SHORT_ENABLED = False
 LONG_ENABLED = True
 
@@ -66,7 +66,7 @@ def run_backtest(
     num_candles: int = Query(2000),
     bb_period: int = Query(20),
     longs_enabled: bool = Query(True),
-    shorts_enabled: bool = Query(True),
+    shorts_enabled: bool = Query(False),
     trend_enabled: bool = Query(True),
     granularity: str = Query("M5"),
     rsi_period: int = Query(14),
@@ -74,14 +74,15 @@ def run_backtest(
     rvol_threshold = Query(1.5)
 ):
 
+    dataManager = DataManager("GoldBotProfile")
 
-    dm_entry = DataManager(INSTRUMENT, START_DATE, CANDLES_TO_LOAD_HIST, GRANULARITY_ENTRY)
-    dm_trend = DataManager(INSTRUMENT, START_DATE, CANDLES_TO_LOAD_HIST, GRANULARITY_TREND)
+    dataManager.add_instrument_dataframe(INSTRUMENT, START_DATE, CANDLES_TO_LOAD_HIST, GRANULARITY_ENTRY, "XAUD_M5_ENTRY")
+    dataManager.add_instrument_dataframe(INSTRUMENT, START_DATE, CANDLES_TO_LOAD_HIST, GRANULARITY_TREND, "XAUD_H1_TREND")
     # Load Data
     total_profit = 0.0
-    df_trend = dm_trend.fetch_candle_dataframe()
-    df_entry = dm_entry.fetch_candle_dataframe()
-    df_entry = dm_entry.add_indicators_rsi_bb_atrsma_rv(df_entry, RSI_PERIOD, BB_PERIOD, BB_STD)
+    dataManager["XAUD_M5_ENTRY"].add_indicators(RSI_PERIOD, BB_PERIOD, BB_STD)
+    df_trend = dataManager["XAUD_H1_TREND"].dataframe
+    df_entry = dataManager["XAUD_M5_ENTRY"].dataframe
     df_trend["EMA200"] = df_trend["close"].ewm(span=200, adjust=False).mean()
     # df_entry["time_num"] = mdates.date2num(df_entry["time"])
     
@@ -157,7 +158,8 @@ def run_backtest(
 
         if position is None and pending_setup is None:
         # LONG SETUP (price stretched down)
-            if longs_enabled and rsi < long_rsi_thershold and price <= (bb_lower * 1) and rvol >= rvol_threshold and long_atrChopCheck == False: # Removed Conditions:trend_direction == "long" and 
+            # for long conditions I swapped rvol >= thershold to rvol <= thershold (9/03/26). Profit boosted significantly for 2025 data.
+            if longs_enabled and rsi < long_rsi_thershold and price <= (bb_lower * 1) and rvol <= rvol_threshold and long_atrChopCheck == False: # Removed Conditions:trend_direction == "long" and rvol <= rvol_threshold and long_atrChopCheck == False 
                 pending_setup = "long"
 
             # SHORT SETUP (price stretched up)
