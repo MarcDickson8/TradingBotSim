@@ -51,15 +51,18 @@ class InstrumentDataFrame:
         num_candles=self.candles_to_load
         candles_remaining = num_candles
         granularity = self.granularity
-        to_time = pd.to_datetime(self.start_date)
+        from_time = pd.to_datetime(self.start_date)
 
         all_records = []
+        api_request_count = 0
 
         while candles_remaining > 0:
             batch_size = min(MAX_COUNT, candles_remaining)
-            params = {"granularity": granularity, "price": "M", "count": batch_size, "from": to_time.strftime("%Y-%m-%dT%H:%M:%SZ")}
+            params = {"granularity": granularity, "price": "M", "count": batch_size, "from": from_time.strftime("%Y-%m-%dT%H:%M:%SZ")}
             r = instruments.InstrumentsCandles(instrument=self.instrument, params=params)
             client.request(r)
+            api_request_count += 1
+            print(f"[API] Request #{api_request_count} — batch_size={batch_size}, from={from_time.strftime('%Y-%m-%dT%H:%M:%SZ')}")
             candles = r.response.get("candles", [])
             if not candles:
                 break
@@ -80,7 +83,7 @@ class InstrumentDataFrame:
             df_chunk = pd.DataFrame(records)
             df_chunk["time"] = pd.to_datetime(df_chunk["time"])
             all_records.append(df_chunk)
-            to_time = df_chunk["time"].min() - pd.Timedelta(seconds=1)
+            from_time = df_chunk["time"].max() + pd.Timedelta(seconds=1)
             candles_remaining -= len(df_chunk)
 
         if not all_records:

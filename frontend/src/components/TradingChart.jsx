@@ -4,7 +4,7 @@ import { createChart, LineSeries, ColorType } from 'lightweight-charts';
 const WINDOW_SIZE = 300;
 const FRAME_DELAY_MS = 40; // speed control
 
-const TradingChart = ({ data = [], activeTradeSpeed, generalSpeed, onUpdateSummary }) => {
+const TradingChart = ({ data = [], activeTradeSpeed, generalSpeed, candles, onUpdateSummary }) => {
     const chartContainerRef = useRef(null);
     const chartRef = useRef(null);
     const seriesRef = useRef(null);
@@ -15,8 +15,9 @@ const TradingChart = ({ data = [], activeTradeSpeed, generalSpeed, onUpdateSumma
     const lowerSeriesRef = useRef(null);
     
 
+    const candleStep = generalSpeed > 10 ? 3 : generalSpeed > 6 ? 2 : 1;
     activeTradeSpeed =  FRAME_DELAY_MS / activeTradeSpeed
-    generalSpeed = FRAME_DELAY_MS / generalSpeed 
+    generalSpeed = FRAME_DELAY_MS / generalSpeed
 
 
     // 1️⃣ Create chart ONCE
@@ -151,7 +152,7 @@ const TradingChart = ({ data = [], activeTradeSpeed, generalSpeed, onUpdateSumma
                 });
             }
 
-            index++;
+            index += tradeActive ? 1 : candleStep;
 
             // ---- Speed decision (neat + obvious) ----
             const delay = tradeActive
@@ -172,7 +173,7 @@ const TradingChart = ({ data = [], activeTradeSpeed, generalSpeed, onUpdateSumma
                 seriesRef.current.removePriceLine(entryLineRef.current);
             }
         };
-    }, [data, activeTradeSpeed, generalSpeed, onUpdateSummary]);
+    }, [data, activeTradeSpeed, generalSpeed, candleStep, candles, onUpdateSummary]);
 
     return (
         <div

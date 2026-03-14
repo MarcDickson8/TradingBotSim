@@ -23,7 +23,7 @@ TREND_DIRECTION_ENABLED = True
 SHORT_ENABLED = False
 LONG_ENABLED = True
 
-START_DATE = "2026-02-06T23:59:59Z"
+START_DATE = "2025-02-06T23:59:59Z"
 
 RSI_PERIOD = 14
 BB_PERIOD = 20 #20
@@ -63,27 +63,42 @@ app.add_middleware(
 # ==============================
 @app.get("/backtest")
 def run_backtest(
-    num_candles: int = Query(2000),
+    num_candles: int = Query(20000),
     bb_period: int = Query(20),
     longs_enabled: bool = Query(True),
     shorts_enabled: bool = Query(False),
-    trend_enabled: bool = Query(True),
+    trend_enabled: bool = Query(False),
     granularity: str = Query("M5"),
     rsi_period: int = Query(14),
-    bb_std = Query(2),
-    rvol_threshold = Query(1.5)
+    bb_std: float = Query(2),
+    rvol_threshold: float = Query(1.5),
+    atr_chop_enabled: bool = Query(False),
+    start_date: str = Query(None)
 ):
+    from datetime import datetime, timedelta, timezone
+    if start_date is None:
+        start_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    else:
+        start_date = f"{start_date}T00:00:00Z"
+
+    print(f"[REQUEST] Frontend request received — num_candles={num_candles}, granularity={granularity}")
+
+    GRANULARITY_MINUTES = {"M1": 1, "M5": 5, "M10": 10, "M15": 15, "M30": 30, "H1": 60, "H4": 240, "D": 1440}
+    entry_mins = GRANULARITY_MINUTES.get(GRANULARITY_ENTRY, 5)
+    trend_mins = GRANULARITY_MINUTES.get(GRANULARITY_TREND, 60)
+    num_candles_trend = max(200, num_candles // (trend_mins // entry_mins))
 
     dataManager = DataManager("GoldBotProfile")
 
-    dataManager.add_instrument_dataframe(INSTRUMENT, START_DATE, CANDLES_TO_LOAD_HIST, GRANULARITY_ENTRY, "XAUD_M5_ENTRY")
-    dataManager.add_instrument_dataframe(INSTRUMENT, START_DATE, CANDLES_TO_LOAD_HIST, GRANULARITY_TREND, "XAUD_H1_TREND")
+    dataManager.add_instrument_dataframe(INSTRUMENT, start_date, num_candles, GRANULARITY_ENTRY, "XAUD_M5_ENTRY")
+    dataManager.add_instrument_dataframe(INSTRUMENT, start_date, num_candles_trend, GRANULARITY_TREND, "XAUD_H1_TREND")
     # Load Data
     total_profit = 0.0
-    dataManager["XAUD_M5_ENTRY"].add_indicators(RSI_PERIOD, BB_PERIOD, BB_STD)
+    dataManager["XAUD_M5_ENTRY"].add_indicators(rsi_period, bb_period, bb_std)
     df_trend = dataManager["XAUD_H1_TREND"].dataframe
     df_entry = dataManager["XAUD_M5_ENTRY"].dataframe
     df_trend["EMA200"] = df_trend["close"].ewm(span=200, adjust=False).mean()
+    print(f"[PROCESSING] Data loaded — {len(df_entry)} entry candles, {len(df_trend)} trend candles. Starting backtest...")
     # df_entry["time_num"] = mdates.date2num(df_entry["time"])
     
     # State Variables (Reset on every request)
@@ -147,23 +162,21 @@ def run_backtest(
 
 
         # ❌ avoid low volatility chop
-        if atr < 0.8 * atr_sma:
-            #print(f"LOW VOLATILITY")
+        if atr_chop_enabled and atr < 0.8 * atr_sma:
             long_atrChopCheck = True
 
         # ❌ avoid low volatility chop
-        if atr < 0.8 * atr_sma:
-            #print(f"LOW VOLATILITY")
+        if atr_chop_enabled and atr < 0.8 * atr_sma:
             short_atrChopCheck = True
 
         if position is None and pending_setup is None:
         # LONG SETUP (price stretched down)
             # for long conditions I swapped rvol >= thershold to rvol <= thershold (9/03/26). Profit boosted significantly for 2025 data.
-            if longs_enabled and rsi < long_rsi_thershold and price <= (bb_lower * 1) and rvol <= rvol_threshold and long_atrChopCheck == False: # Removed Conditions:trend_direction == "long" and rvol <= rvol_threshold and long_atrChopCheck == False 
+            if longs_enabled and rsi < long_rsi_thershold and price <= (bb_lower * 1) and rvol <= rvol_threshold and long_atrChopCheck == False and (not trend_enabled or trend_direction == "long"):
                 pending_setup = "long"
 
             # SHORT SETUP (price stretched up)
-            elif shorts_enabled and rsi > short_rsi_thershold and price >= (bb_upper * 1) and rvol >= rvol_threshold and short_atrChopCheck == False and trend_direction == "short": # Removed Conditions:  || and rvol >= RVOL_THRESHOLD  
+            elif shorts_enabled and rsi > short_rsi_thershold and price >= (bb_upper * 1) and rvol >= rvol_threshold and short_atrChopCheck == False and (not trend_enabled or trend_direction == "short"):
                 pending_setup = "short"
 
         # REVERSAL CONFIRMATION
