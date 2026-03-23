@@ -58,7 +58,7 @@ class InstrumentDataFrame:
 
         while candles_remaining > 0:
             batch_size = min(MAX_COUNT, candles_remaining)
-            params = {"granularity": granularity, "price": "M", "count": batch_size, "from": from_time.strftime("%Y-%m-%dT%H:%M:%SZ")}
+            params = {"granularity": granularity, "price": "BAM", "count": batch_size, "from": from_time.strftime("%Y-%m-%dT%H:%M:%SZ")}
             r = instruments.InstrumentsCandles(instrument=self.instrument, params=params)
             client.request(r)
             api_request_count += 1
@@ -76,6 +76,8 @@ class InstrumentDataFrame:
                     "high": float(candle["mid"]["h"]),
                     "low": float(candle["mid"]["l"]),
                     "close": float(candle["mid"]["c"]),
+                    "ask_close": float(candle["ask"]["c"]),
+                    "bid_close": float(candle["bid"]["c"]),
                     "volume": float(candle["volume"])
                 })
             if not records:
@@ -85,6 +87,9 @@ class InstrumentDataFrame:
             all_records.append(df_chunk)
             from_time = df_chunk["time"].max() + pd.Timedelta(seconds=1)
             candles_remaining -= len(df_chunk)
+            # If OANDA returned fewer candles than requested, we've hit the end of available data
+            if len(records) < batch_size:
+                break
 
         if not all_records:
             return pd.DataFrame()

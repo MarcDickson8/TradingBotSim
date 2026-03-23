@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import TradingChart from './components/TradingChart';
+import ProfitChart from './components/ProfitChart';
+import Leaderboard from './components/Leaderboard';
 
 function App() {
   const [chartData, setChartData] = useState([]);
@@ -17,9 +19,37 @@ function App() {
   const [bbStd, setBbStd] = useState(2);
   const [rvolThreshold, setRvolThreshold] = useState(1.5);
   const [atrChopEnabled, setAtrChopEnabled] = useState(false);
+  const [reinvestEnabled, setReinvestEnabled] = useState(false);
+  const [initialCapital, setInitialCapital] = useState(10000);
+  const [leverage, setLeverage] = useState(1);
+  const [tradingStartTime, setTradingStartTime] = useState('05:00');
+  const [tradingEndTime, setTradingEndTime] = useState('17:00');
+  const [slMultiplier, setSlMultiplier] = useState(1.0);
   const oneYearAgo = new Date();
   oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
   const [startDate, setStartDate] = useState(oneYearAgo.toISOString().split('T')[0]);
+  const [skipSignal, setSkipSignal] = useState(0);
+  const [showAllSignal, setShowAllSignal] = useState(0);
+  const [leaderboard, setLeaderboard] = useState([]);
+
+  const fetchLeaderboard = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/leaderboard');
+      if (res.ok) setLeaderboard(await res.json());
+    } catch (_) {}
+  };
+
+  useEffect(() => { fetchLeaderboard(); }, []);
+
+  const deleteEntry = async (id) => {
+    await fetch(`http://localhost:8000/leaderboard/${id}`, { method: 'DELETE' });
+    fetchLeaderboard();
+  };
+
+  const clearLeaderboard = async () => {
+    await fetch('http://localhost:8000/leaderboard', { method: 'DELETE' });
+    setLeaderboard([]);
+  };
 
   const fetchData = async () => {
     try {
@@ -35,6 +65,12 @@ function App() {
         rvol_threshold: rvolThreshold,
         atr_chop_enabled: atrChopEnabled,
         start_date: startDate,
+        reinvest_enabled: reinvestEnabled,
+        initial_capital: initialCapital,
+        leverage: leverage,
+        trading_start_time: tradingStartTime,
+        trading_end_time: tradingEndTime,
+        sl_multiplier: slMultiplier,
       });
       const response = await fetch(`http://localhost:8000/backtest?${params}`);
 
@@ -49,6 +85,10 @@ function App() {
 
       if (json && json.chartData) {
         setChartData(json.chartData);
+        if (json.actualCandles && json.actualCandles < candles) {
+          setCandles(json.actualCandles);
+        }
+        fetchLeaderboard();
       } else {
         console.error("JSON received, but 'chartData' key is missing:", json);
       }
@@ -140,25 +180,65 @@ function App() {
             <input type="checkbox" checked={atrChopEnabled} onChange={(e) => setAtrChopEnabled(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
             ATR Chop Filter
           </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '12px', color: '#aaa' }}>
+            <input type="checkbox" checked={reinvestEnabled} onChange={(e) => setReinvestEnabled(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
+            Reinvest Profits
+          </label>
+        </div>
+
+        <div style={fieldStyle}>
+          <label style={labelStyle}>Initial Capital</label>
+          <input type="number" min="100" step="100" value={initialCapital} onChange={(e) => setInitialCapital(Number(e.target.value))} style={inputStyle} />
+        </div>
+
+        <div style={fieldStyle}>
+          <label style={labelStyle}>Leverage (x)</label>
+          <input type="number" min="1" step="1" value={leverage} onChange={(e) => setLeverage(Number(e.target.value))} style={inputStyle} />
+        </div>
+
+        <div style={fieldStyle}>
+          <label style={labelStyle}>Trade Start (UTC)</label>
+          <input type="time" value={tradingStartTime} onChange={(e) => setTradingStartTime(e.target.value)} style={inputStyle} />
+        </div>
+
+        <div style={fieldStyle}>
+          <label style={labelStyle}>Trade End (UTC)</label>
+          <input type="time" value={tradingEndTime} onChange={(e) => setTradingEndTime(e.target.value)} style={inputStyle} />
+        </div>
+
+        <div style={fieldStyle}>
+          <label style={labelStyle}>SL Multiplier</label>
+          <input type="number" min="0.1" step="0.1" value={slMultiplier} onChange={(e) => setSlMultiplier(Number(e.target.value))} style={inputStyle} />
         </div>
       </div>
 
-      <button
-        onClick={fetchData}
-        style={{ padding: '10px 20px', marginBottom: '20px', cursor: 'pointer' }}
-      >
-        Historical Data Test
-      </button>
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+        <button onClick={fetchData} style={{ padding: '10px 20px', cursor: 'pointer' }}>
+          Historical Data Test
+        </button>
+        <button onClick={() => setSkipSignal(s => s + 1)} style={{ padding: '10px 20px', cursor: 'pointer' }} disabled={!chartData.length}>
+          Skip to End
+        </button>
+        <button onClick={() => setShowAllSignal(s => s + 1)} style={{ padding: '10px 20px', cursor: 'pointer' }} disabled={!chartData.length}>
+          Show Full Timeframe
+        </button>
+      </div>
 
       <div style={{ border: '1px solid #2b2b43', borderRadius: '8px', overflow: 'hidden' }}>
         {chartData && chartData.length > 0 ? (
-          <TradingChart data={chartData} activeTradeSpeed={activeTradeSpeed} generalSpeed={generalSpeed} onUpdateSummary={setSummary} />
+          <TradingChart data={chartData} activeTradeSpeed={activeTradeSpeed} generalSpeed={generalSpeed} onUpdateSummary={setSummary} skipSignal={skipSignal} showAllSignal={showAllSignal} />
         ) : (
           <div style={{ padding: '20px', textAlign: 'center', color: '#888' }}>
             No data loaded. Click "Historical Data Test" to fetch.
           </div>
         )}
       </div>
+
+      {chartData && chartData.length > 0 && (
+        <div style={{ border: '1px solid #2b2b43', borderRadius: '8px', overflow: 'hidden', marginTop: '20px' }}>
+          <ProfitChart data={chartData} />
+        </div>
+      )}
       {summary && (
         <div
           style={{
@@ -175,10 +255,19 @@ function App() {
             <strong>Total Profit:</strong> ${summary.total_profit}
           </div>
           <div>
+            <strong>Brokerage Fees:</strong> <span style={{ color: '#e57373' }}>-${summary.total_fees ?? '0.00'}</span>
+            <span style={{ fontSize: '11px', color: '#666', marginLeft: '6px' }}>(live spread from OANDA)</span>
+          </div>
+          <div>
+            <strong>Net Profit:</strong> <span style={{ color: summary.total_profit - (summary.total_fees ?? 0) >= 0 ? '#26a69a' : '#e57373' }}>${((summary.total_profit ?? 0) - (summary.total_fees ?? 0)).toFixed(2)}</span>
+          </div>
+          <div>
             <strong>Trades:</strong> {summary.trade_count}
           </div>
         </div>
       )}
+
+      <Leaderboard entries={leaderboard} onDelete={deleteEntry} onClearAll={clearLeaderboard} />
     </div>
   );
 }

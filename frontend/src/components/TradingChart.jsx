@@ -4,7 +4,7 @@ import { createChart, LineSeries, ColorType } from 'lightweight-charts';
 const WINDOW_SIZE = 300;
 const FRAME_DELAY_MS = 40; // speed control
 
-const TradingChart = ({ data = [], activeTradeSpeed, generalSpeed, candles, onUpdateSummary }) => {
+const TradingChart = ({ data = [], activeTradeSpeed, generalSpeed, candles, onUpdateSummary, skipSignal, showAllSignal }) => {
     const chartContainerRef = useRef(null);
     const chartRef = useRef(null);
     const seriesRef = useRef(null);
@@ -128,6 +128,7 @@ const TradingChart = ({ data = [], activeTradeSpeed, generalSpeed, candles, onUp
                 stopLineRef.current = null;
                 onUpdateSummary({
                     total_profit: data[index].total_profit,
+                    total_fees: data[index].total_fees,
                     trade_count: data[index].trade_count,
                 });
             }
@@ -174,6 +175,38 @@ const TradingChart = ({ data = [], activeTradeSpeed, generalSpeed, candles, onUp
             }
         };
     }, [data, activeTradeSpeed, generalSpeed, candleStep, candles, onUpdateSummary]);
+
+    // Skip to end of simulation
+    useEffect(() => {
+        if (!skipSignal || !seriesRef.current || data.length < WINDOW_SIZE) return;
+        clearTimeout(timeoutRef.current);
+        const last = data[data.length - 1];
+        const windowData = data.slice(-WINDOW_SIZE).map(d => ({ time: d.time, value: d.close }));
+        const upperData = data.slice(-WINDOW_SIZE).map(d => ({ time: d.time, value: d.bb_upper }));
+        const lowerData = data.slice(-WINDOW_SIZE).map(d => ({ time: d.time, value: d.bb_lower }));
+        seriesRef.current.setData(windowData);
+        upperSeriesRef.current.setData(upperData);
+        lowerSeriesRef.current.setData(lowerData);
+        if (stopLineRef.current) { seriesRef.current.removePriceLine(stopLineRef.current); stopLineRef.current = null; }
+        if (entryLineRef.current) { seriesRef.current.removePriceLine(entryLineRef.current); entryLineRef.current = null; }
+        chartRef.current.timeScale().scrollToRealTime();
+        onUpdateSummary({ total_profit: last.total_profit, total_fees: last.total_fees, trade_count: last.trade_count });
+    }, [skipSignal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Show entire timeframe at once
+    useEffect(() => {
+        if (!showAllSignal || !seriesRef.current || data.length === 0) return;
+        clearTimeout(timeoutRef.current);
+        seriesRef.current.setData(data.map(d => ({ time: d.time, value: d.close })));
+        upperSeriesRef.current.setData(data.map(d => ({ time: d.time, value: d.bb_upper })));
+        lowerSeriesRef.current.setData(data.map(d => ({ time: d.time, value: d.bb_lower })));
+        if (stopLineRef.current) { seriesRef.current.removePriceLine(stopLineRef.current); stopLineRef.current = null; }
+        if (entryLineRef.current) { seriesRef.current.removePriceLine(entryLineRef.current); entryLineRef.current = null; }
+        chartRef.current.applyOptions({ timeScale: { barSpacing: 1, minBarSpacing: 0.001, fixLeftEdge: true, fixRightEdge: true } });
+        requestAnimationFrame(() => chartRef.current.timeScale().fitContent());
+        const last = data[data.length - 1];
+        onUpdateSummary({ total_profit: last.total_profit, total_fees: last.total_fees, trade_count: last.trade_count });
+    }, [showAllSignal]); // eslint-disable-line react-hooks/exhaustive-deps
 
     return (
         <div
